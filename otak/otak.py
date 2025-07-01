@@ -7,9 +7,131 @@
 import openturns as ot
 import numpy as np
 
+from abc import ABC, abstractmethod
 
 
-class AK_ISAlgorithm(object):
+class AK_Algorithm(ABC):
+    """
+    Abstract base class for AK algorithms
+        
+    :event: ThresholdEvent based on composite vector of input variables on limit state function 
+    
+    :n_MC: integer, number of MC samples for the probability estimate
+    
+    :n_DoE: integer, number of samples in initial Kriging DoE
+    
+    :sim_budget: integer, total simulation budget available
+    
+    :basis: basis of kriging model
+    
+    :cov_model: covariance model of kriging
+    
+    :u_criterion: float, threshold value for `u criterion`
+    
+    :verbose: verbosity parameter 
+        
+    """
+
+    def __init__(self,event,n_MC,n_DoE,sim_budget,basis,cov_model,u_criterion=2,verbose = False):
+        self.n_MC = n_MC
+        self.n_DoE = n_DoE
+        self.event = event
+        self.limit_state_function = event.getFunction()
+        self.S = event.getThreshold()
+        self.basis = basis
+        self.cov_model = cov_model
+        self.dim = event.getAntecedent().getDimension()
+        self.proba = 0.
+        self.cv = 0.
+        self.distrib = event.getAntecedent().getDistribution()
+        self.nb_eval = 0
+        self.U_criterion = u_criterion
+        self.DoE = None
+        self.kriging_model = None
+        self.verbose = verbose
+        self.samples = None
+        self.max_sim = sim_budget
+        self.operator = event.getOperator()
+        
+    #Function determining the U criterion of AK
+    def compute_U(self,my_krig,list_id_evaluated):
+        """
+        Function computing the infill criterion
+        
+        :my_krig: Kriging model, :py:class:`openturns.KrigingResult`
+        
+        :list_id_evaluated: list of evaluated :py:class:`openturns.Sample`
+        """
+        y_pred = my_krig.getConditionalMean(self.samples)
+        y_var_pred = my_krig.getConditionalMarginalVariance(self.samples)
+        
+        list_id_non_evaluated = np.setdiff1d(np.arange(self.n_MC),list_id_evaluated)
+        U = np.zeros((self.n_MC,1))
+        
+        U[list_id_non_evaluated] = np.abs(ot.Sample([ot.Point([self.S])]*int(len(list_id_non_evaluated)))-y_pred[list_id_non_evaluated])/np.sqrt(y_var_pred[list_id_non_evaluated])
+        
+        if len(list_id_evaluated)>0:
+            U[list_id_evaluated] = 5e5
+        return U
+    
+    @abstractmethod
+    def compute_proba(self):
+        """
+        Abstract method to compute the failure probability
+        
+        """
+        pass
+
+    #Accessor to the number of evaluated samples
+    def getSimBudget(self):
+        """
+        Accessor to the simulation budget
+        
+        """
+        return self.nb_eval
+    
+    #Accessor to the kriging model
+    def getKrigingModel(self):
+        """
+        Accessor to Kriging model,  :py:class:`openturns.KrigingResult`
+        
+        """
+        return self.kriging_model
+                   
+    #Accessor to the DoE
+    def getDoE(self):
+        """
+        Accessor to the Design of Experiments, :py:class:`openturns.Sample`
+        
+        """
+        return self.DoE
+    
+    #Accessor to the failure probability
+    def getFailureProbability(self):
+        """
+        Accessor to failure probability
+        
+        """
+        return self.proba
+    
+    #Accessor to the failure probability
+    def getCoefficientOfVariation(self):
+        """
+        Accessor to coefficient of variation
+        
+        """
+        return self.cv
+    
+    #Accessor to the MC samples
+    def getSamples(self):
+        """
+        Accessor to samples,  :py:class:`openturns.Sample`
+        
+        """
+        return self.samples
+
+
+class AK_ISAlgorithm(AK_Algorithm):
     """
     Class implementing AK IS algorithm
         
@@ -35,49 +157,11 @@ class AK_ISAlgorithm(object):
 	
     def __init__(self,event,n_IS,n_DoE,sim_budget,basis,cov_model,FORM_solver,u_criterion=2,verbose = False):
 
-        self.n_IS = n_IS
-        self.n_DoE = n_DoE
-        self.limit_state_function = event.getFunction()
-        self.S = event.getThreshold()
-        self.basis = basis
-        self.cov_model = cov_model
-        self.dim = event.getAntecedent().getDimension()
-        self.proba = 0.
-        self.cv = 0.
-        self.distrib = event.getAntecedent().getDistribution()
-        self.tol_var_krig = cov_model.getNuggetFactor()
-        self.nb_eval = 0
-        self.U_criterion = u_criterion
-        self.DoE = None
-        self.kriging_model = None
-        self.verbose = verbose
-        self.samples = None
+        super().__init__(event,n_IS,n_DoE,sim_budget,basis,cov_model,u_criterion,verbose)
+
         self.FORM_solver = FORM_solver
         self.inv_isoprobtrans = self.distrib.getInverseIsoProbabilisticTransformation()
-        self.max_sim = sim_budget
         self.FORM_result = None
-        self.operator =  event.getOperator()
-		
-    #Function determining the U criterion of AK -IS
-    def compute_U(self,my_krig,list_id_evaluated):
-        """
-        Function computing the infill criterion
-        
-        :my_krig: Kriging model :py:class:`openturns.KrigingResult`
-		
-        :list_id_evaluated: list of evaluated :py:class:`openturns.Sample`
-        """
-		
-        y_pred = my_krig.getConditionalMean(self.samples)
-        y_var_pred = my_krig.getConditionalMarginalVariance(self.samples)
-        list_id_non_evaluated = np.setdiff1d(np.arange(self.n_IS),list_id_evaluated)
-        
-        U = np.zeros((self.n_IS,1))
-        U[list_id_non_evaluated] = np.abs(ot.Sample([ot.Point([self.S])]*int(len(list_id_non_evaluated)))-y_pred[list_id_non_evaluated])/np.sqrt(y_var_pred[list_id_non_evaluated])
-            
-        if len(list_id_evaluated)>0:
-            U[list_id_evaluated] = 5e5
-        return U
     
     # FORM COMPUTATION
     def compute_FORM(self):
@@ -109,7 +193,7 @@ class AK_ISAlgorithm(object):
         # Derivation of auxiliary density and sampling
         myImportance = ot.Normal(self.dim)
         myImportance.setMu(self.FORM_result.getStandardSpaceDesignPoint())
-        samples_std_space = myImportance.getSample(self.n_IS)
+        samples_std_space = myImportance.getSample(self.n_MC)
         self.samples_std_space = samples_std_space
         self.samples = self.inv_isoprobtrans(samples_std_space)
         
@@ -177,13 +261,13 @@ class AK_ISAlgorithm(object):
                
                 y = my_krig.getConditionalMean(self.samples)
                 
-                I = [self.operator(y[i][0],self.S) for i in range(self.n_IS)]
+                I = [self.operator(y[i][0],self.S) for i in range(self.n_MC)]
                 
-                #[print(y[i][0])for i in range(self.n_IS)]
+                #[print(y[i][0])for i in range(self.n_MC)]
                 
                 int_I = [int(i) for i in I]
                 
-                Pf = 1/self.n_IS*np.sum(np.array(int_I)*weights)
+                Pf = 1/self.n_MC*np.sum(np.array(int_I)*weights)
                 self.proba = Pf
                 self.nb_eval = self.n_DoE+nb_pt_sim
                 self.DoE = [DoE_inputs,DoE_responses]
@@ -198,49 +282,9 @@ class AK_ISAlgorithm(object):
                         print('{:9e}'.format(current_min_U),' | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:10e}'.format(Pf))
                         
         return 
-                   
-    #Accessor to the number of evaluated samples             
-    def getSimBudget(self):
-        """
-        Accessor to simulation budget        
-        
-        """
-        return self.nb_eval
-    
-    #Accessor to the kriging model 
-    def getKrigingModel(self):
-        """
-        Accessor to Kriging model,  :py:class:`openturns.KrigingResult`        
-        
-        """
-        return self.kriging_model
-                   
-    #Accessor to the DoE
-    def getDoE(self):
-        """
-        Accessor to Design of Experiments,  :class:`openturns.Sample`   
-
-        """
-        return self.DoE
-    
-    #Accessor to the failure probability
-    def getFailureProbability(self):
-        """
-        Accessor to computed failure probability   
-        
-        """
-        return self.proba
-    
-    #Accessor to the MonteCarlo samples
-    def getIS_Samples(self):
-        """
-        Accessor to Importance Sampling samples,  :py:class:`openturns.Sample`
-        
-        """
-        return self.samples
 		
 		
-class AK_MCSAlgorithm(object):
+class AK_MCSAlgorithm(AK_Algorithm):
     """
     Class implementing AK MCS algorithm
 	 
@@ -263,46 +307,8 @@ class AK_MCSAlgorithm(object):
     """
     
     def __init__(self,event,n_MC,n_DoE,sim_budget,basis, cov_model,u_criterion = 2,verbose = False):
-        self.n_MC = n_MC
-        self.n_DoE = n_DoE
-        self.limit_state_function = event.getFunction()
-        self.S = event.getThreshold()
-        self.basis = basis
-        self.cov_model = cov_model
-        self.dim = event.getAntecedent().getDimension()
-        self.proba = 0.
-        self.distrib = event.getAntecedent().getDistribution()
-        self.nb_eval = 0
-        self.cv = None
-        self.max_sim = sim_budget
-        self.U_criterion = u_criterion 
-        self.DoE = None
-        self.kriging_model = None
-        self.verbose = verbose
-        self.samples = None
-        self.operator = event.getOperator()
-        self.event = event
+        super().__init__(event,n_MC,n_DoE,sim_budget,basis,cov_model,u_criterion,verbose)
         
-    #Function determining the U criterion of AK -MCS
-    def compute_U(self,my_krig,list_id_evaluated):
-        """
-        Function computing the infill criterion
-        
-        :my_krig: Kriging models, :py:class:`openturns.KrigingResult`
-        
-        :list_id_evaluated: list of evaluated :py:class:`openturns.Sample`
-        """
-        y_pred = my_krig.getConditionalMean(self.samples)
-        y_var_pred = my_krig.getConditionalMarginalVariance(self.samples)
-        
-        list_id_non_evaluated = np.setdiff1d(np.arange(self.n_MC),list_id_evaluated)
-        U = np.zeros((self.n_MC,1))
-        
-        U[list_id_non_evaluated] = np.abs(ot.Sample([ot.Point([self.S])]*int(len(list_id_non_evaluated)))-y_pred[list_id_non_evaluated])/np.sqrt(y_var_pred[list_id_non_evaluated])
-        
-        if len(list_id_evaluated)>0:
-            U[list_id_evaluated] = 5e5
-        return U
 
     #Function computing the probability of failure
     def compute_proba(self):
@@ -394,57 +400,9 @@ class AK_MCSAlgorithm(object):
                
             
         return 
-                   
-    #Accessor to the number of evaluated samples             
-    def getSimBudget(self):      
-        """
-        Accessor to the simulation budget
-        
-        """      
-        return self.nb_eval
-    
-    #Accessor to the kriging model 
-    def getKrigingModel(self):
-        """
-        Accessor to the Kriging model,  :py:class:`openturns.KrigingResult` 
-        
-        """       
-        return self.kriging_model
-                   
-    #Accessor to the DoE
-    def getDoE(self):
-        """
-        Accessor to the Design of Experiments, :py:class:`openturns.Sample`
-        
-        """
-        return self.DoE
-    
-    #Accessor to the failure probability
-    def getFailureProbability(self):
-        """
-        Accessor to the computed failure probability
-        
-        """
-        return self.proba
-    
-    #Accessor to the failure probability
-    def getCoefficientOfVariation(self):
-        """
-        Accessor to Coefficient of Variation 
-        
-        """
-        return self.cv        
-    
-    #Accessor to the MonteCarlo samples
-    def getMonteCarloSamples(self):
-        """
-        Accessor to Monte-Carlo samples,  :py:class:`openturns.Samples`
-        
-        """
-        return self.samples
-		
 
-class AK_SSAlgorithm(object):
+
+class AK_SSAlgorithm(AK_Algorithm):
     """
     Class implementing AK SS algorithm
 	 
@@ -472,52 +430,15 @@ class AK_SSAlgorithm(object):
         
     """
     
-    def __init__(self,event,n_SS,n_DoE,sim_budget,basis, cov_model,proposal_range = 1.,target_proba=0.5,cv_target = 0.05,criterion = 2,verbose = False):
-        self.n_SS = n_SS
-        self.n_DoE = n_DoE
-        self.limit_state_function = event.getFunction()
-        self.S = event.getThreshold()
-        self.basis = basis
-        self.cov_model = cov_model
-        self.dim = event.getAntecedent().getDimension()
-        self.proba = 0.
-        self.distrib = event.getAntecedent().getDistribution()
-        self.nb_eval = 0
+    def __init__(self,event,n_SS,n_DoE,sim_budget,basis, cov_model,proposal_range = 1.,target_proba=0.5,cv_target = 0.05,u_criterion = 2,verbose = False):
+        super().__init__(event,n_SS,n_DoE,sim_budget,basis,cov_model,u_criterion,verbose)
+
         self.cv = 1e4
-        self.max_sim = sim_budget
-        self.U_criterion = criterion
-        self.DoE = None
-        self.kriging_model = None
-        self.verbose = verbose
-        self.samples_SS = None
-        self.operator = event.getOperator()
-        self.event = event
         self.cv_target = cv_target
         self.proposal_range = proposal_range
         self.target_proba = target_proba
         self.discrepancy_LHS = 5
-        
-        
-    #Function determining the U criterion of AK -SS
-    def compute_U(self,my_krig,list_id_evaluated):
-        """
-        Function computing the infill criterion
-        
-        :my_krig: Kriging model :py:class:`openturns.KrigingResult`
-        
-        :list_id_evaluated: list of evaluated :py:class:`openturns.Sample`
-        """        
-        y_pred = my_krig.getConditionalMean(self.samples_SS)
-        y_var_pred = my_krig.getConditionalMarginalVariance(self.samples_SS)
-        
-        list_id_non_evaluated = np.setdiff1d(np.arange(self.n_SS),list_id_evaluated)
-        U = np.zeros((self.n_SS,1))
-        
-        U[list_id_non_evaluated] = np.abs(ot.Sample([ot.Point([self.S])]*int(len(list_id_non_evaluated)))-y_pred[list_id_non_evaluated])/np.sqrt(y_var_pred[list_id_non_evaluated])
-       
-        if len(list_id_evaluated)>0:
-            U[list_id_evaluated] = 5e5
-        return U
+
 
     #Function computing the probability of failure
     def compute_proba(self):
@@ -548,8 +469,8 @@ class AK_SSAlgorithm(object):
                 #Generation of experiment ### modification of initial algorithm --> not taking into account the first iteration of SS but another sampling 
                 
                 ot.RandomGenerator.SetSeed(1)
-                myExperiment = ot.MonteCarloExperiment(self.distrib, self.n_SS)
-                self.samples_SS = myExperiment.generate()
+                myExperiment = ot.MonteCarloExperiment(self.distrib, self.n_MC)
+                self.samples = myExperiment.generate()
                 
                 list_id_samples_evaluated=[]
                 
@@ -576,8 +497,8 @@ class AK_SSAlgorithm(object):
                 
             else: # Add points to current first iter of MC algo
                 samples_additional_MC = myExperiment.generate()
-                self.samples_SS = ot.Sample(np.concatenate((self.samples_SS,samples_additional_MC)))
-                self.n_SS=  self.samples_SS.getSize()
+                self.samples = ot.Sample(np.concatenate((self.samples,samples_additional_MC)))
+                self.n_MC=  self.samples.getSize()
                 #Compute u criterion on these samples
                 U_y_pred = self.compute_U(my_krig,list_id_samples_evaluated)
                 id_opt_U=np.argmin(U_y_pred)
@@ -586,7 +507,7 @@ class AK_SSAlgorithm(object):
 
             while nb_pt_sim<self.max_sim and current_min_U < self.U_criterion:
                     #evaluation of true function
-                    x_new = self.samples_SS[int(id_opt_U)]
+                    x_new = self.samples[int(id_opt_U)]
                     y_new = self.limit_state_function(x_new)
 
                     DoE_inputs.add(x_new)
@@ -634,7 +555,7 @@ class AK_SSAlgorithm(object):
             Y_kr = ot.CompositeRandomVector(metamodel, inputVector)
             my_eventkriging = ot.ThresholdEvent(Y_kr,self.operator,self.S)               
             SS_kr = ot.SubsetSampling(my_eventkriging,self.proposal_range,self.target_proba)
-            SS_kr.setMaximumOuterSampling(self.n_SS)
+            SS_kr.setMaximumOuterSampling(self.n_MC)
             SS_kr.setKeepSample(True)
             SS_kr.run()
             res = SS_kr.getResult()
@@ -654,52 +575,3 @@ class AK_SSAlgorithm(object):
             current_iter+=1
 
         return 
-                   
-    #Accessor to the number of evaluated samples             
-    def getSimBudget(self):
-        """
-        Accessor to the simulation budget
-        
-        """     
-        return self.nb_eval
-    
-    #Accessor to the kriging model 
-    def getKrigingModel(self):
-        """
-        Accessor to Kriging model,  :py:class:`openturns.KrigingResult`         
-        
-        """        
-        return self.kriging_model
-                   
-    #Accessor to the DoE
-    def getDoE(self):
-        """
-        Accessor to the Design of Experiments, :py:class:`openturns.Sample`
-        
-        """
-        return self.DoE
-    
-    #Accessor to the failure probability
-    def getFailureProbability(self):
-        """
-        Accessor to failure probability
-        
-        """
-        return self.proba
-    
-    #Accessor to the failure probability
-    def getCoefficientOfVariation(self):
-        """
-        Accessor to coefficient of variation
-        
-        """
-        return self.cv      
-    
-    #Accessor to the SubsetSampling samples
-    def getEventSamples(self):
-        
-        """
-        Accessor to Event samples,  :py:class:`openturns.Sample`
-        
-        """
-        return self.samples
