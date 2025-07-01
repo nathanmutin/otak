@@ -46,7 +46,8 @@ class AK_Algorithm(ABC):
         self.distrib = event.getAntecedent().getDistribution()
         self.nb_eval = 0
         self.U_criterion = u_criterion
-        self.DoE = None
+        self.DoE_inputs = None
+        self.DoE_responses = None
         self.kriging_model = None
         self.verbose = verbose
         self.samples = None
@@ -75,7 +76,7 @@ class AK_Algorithm(ABC):
         return U
     
     @abstractmethod
-    def generate_samples_and_weigts(self):
+    def generate_samples_and_weights(self):
         """
         Abstract method to generate samples and weights for the algorithm.
         
@@ -90,13 +91,13 @@ class AK_Algorithm(ABC):
         Function computing failure probability using AK-MCS
         
         """
-        self.samples, weights = self.generate_samples_and_weigts()
+        self.samples, weights = self.generate_samples_and_weights()
         
         # Generation of DoE
         DoE_inputs = self.samples[0:self.n_DoE]
         # Calculation of True function of the DoE
         DoE_responses = self.limit_state_function(DoE_inputs)
-        list_id_samples_evaluated = np.linspace(0,self.n_DoE-1,self.n_DoE,dtype = int).tolist()
+        list_id_samples_evaluated = [i for i in range(self.n_DoE)]
 
         # Definition of Kriging algorithm
         algokriging = ot.KrigingAlgorithm(DoE_inputs, 
@@ -109,14 +110,15 @@ class AK_Algorithm(ABC):
 
         U_y_pred = self.compute_U(my_krig,list_id_samples_evaluated)
         id_opt_U = np.argmin(U_y_pred)
-        current_min_U = np.min(U_y_pred)
+        current_min_U = U_y_pred[id_opt_U]
 
         nb_pt_sim = 0
         list_id_samples_evaluated.append(id_opt_U)
+        print('current_min_U', '| Nb_sim',' | Probability estimate', ' | Coefficient of variation')
         
         while nb_pt_sim<self.max_sim and current_min_U < self.U_criterion:
                 #evaluation of true function
-                x_new = self.samples[int(id_opt_U)]
+                x_new = self.samples[id_opt_U]
                 y_new = self.limit_state_function(x_new)
 
                 DoE_inputs.add(x_new)
@@ -129,7 +131,6 @@ class AK_Algorithm(ABC):
                                                   updated_cov,
                                                   self.basis)
                 
-                
                 solver_kriging = ot.NLopt('GN_DIRECT')
                 solver_kriging.setStartingPoint(startingPoint)
                 algokriging.setOptimizationAlgorithm(solver_kriging)
@@ -141,8 +142,8 @@ class AK_Algorithm(ABC):
 
                 # computation of U
                 U_y_pred = self.compute_U(my_krig,list_id_samples_evaluated)
-                current_min_U=np.min(U_y_pred)
-                id_opt_U = np.argmin(U_y_pred)         
+                id_opt_U = np.argmin(U_y_pred)
+                current_min_U = U_y_pred[id_opt_U]
                 nb_pt_sim = nb_pt_sim+1
                 list_id_samples_evaluated.append(id_opt_U)
 
@@ -153,16 +154,10 @@ class AK_Algorithm(ABC):
 
                 self.proba = Pf
                 self.nb_eval = self.n_DoE+nb_pt_sim
-                self.DoE = [DoE_inputs,DoE_responses]
                 self.kriging_model = my_krig
         
                 if self.verbose == True:
-                    if nb_pt_sim == 1:
-                        print('current_min_U', '| Nb_sim',' | Probability estimate', ' | Coefficient of variation')
-                        print('{:9e}'.format(current_min_U),' | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:11e}'.format(Pf),'   |      ','{:11e}'.format(self.cv))
-
-                    else:
-                        print('{:9e}'.format(current_min_U),' | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:11e}'.format(Pf),'   |      ','{:11e}'.format(self.cv))
+                    print('{:9e}'.format(current_min_U),' | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:11e}'.format(Pf),'   |      ','{:11e}'.format(self.cv))
         
         return
 
@@ -185,10 +180,14 @@ class AK_Algorithm(ABC):
     #Accessor to the DoE
     def getDoE(self):
         """
-        Accessor to the Design of Experiments, :py:class:`openturns.Sample`
+        Accessor to the Design of Experiments (DoE)
+
+        Returns:
+            inputs: :py:class:`openturns.Sample` of DoE inputs
+            responses: :py:class:`openturns.Sample` of DoE responses
         
         """
-        return self.DoE
+        return self.DoE_inputs, self.DoE_responses
     
     #Accessor to the failure probability
     def getFailureProbability(self):
@@ -247,7 +246,7 @@ class AK_ISAlgorithm(AK_Algorithm):
         self.inv_isoprobtrans = self.distrib.getInverseIsoProbabilisticTransformation()
         self.FORM_result = None
     
-    def generate_samples_and_weigts(self):
+    def generate_samples_and_weights(self):
         """
         Function to generate samples and weights for the AK-IS algorithm.
         
@@ -310,7 +309,7 @@ class AK_MCSAlgorithm(AK_Algorithm):
     def __init__(self,event,n_MC,n_DoE,sim_budget,basis, cov_model,u_criterion = 2,verbose = False):
         super().__init__(event,n_MC,n_DoE,sim_budget,basis,cov_model,u_criterion,verbose)
     
-    def generate_samples_and_weigts(self):
+    def generate_samples_and_weights(self):
         """
         Function to generate samples and weights for the AK-MCS algorithm.
         
@@ -368,6 +367,8 @@ class AK_SSAlgorithm(AK_Algorithm):
         self.target_proba = target_proba
         self.discrepancy_LHS = 5
 
+    def generate_samples_and_weights(self):
+        return None, None
 
     #Function computing the probability of failure
     def compute_proba(self):
@@ -392,12 +393,11 @@ class AK_SSAlgorithm(AK_Algorithm):
         
         current_iter = 1
         nb_pt_sim=0
-        
+        print('current_iter', '| Nb_sim',' | Probability estimate', ' | Coefficient of variation')
+
         while (self.cv>self.cv_target and nb_pt_sim<self.max_sim) :                
             if current_iter ==1: #first iter
                 #Generation of experiment ### modification of initial algorithm --> not taking into account the first iteration of SS but another sampling 
-                
-                ot.RandomGenerator.SetSeed(1)
                 myExperiment = ot.MonteCarloExperiment(self.distrib, self.n_MC)
                 self.samples = myExperiment.generate()
                 
@@ -421,19 +421,19 @@ class AK_SSAlgorithm(AK_Algorithm):
                 updated_cov = my_krig.getCovarianceModel()
                 U_y_pred = self.compute_U(my_krig,list_id_samples_evaluated)
                 id_opt_U=np.argmin(U_y_pred)
-                current_min_U = np.min(U_y_pred)
+                current_min_U = U_y_pred[id_opt_U]
                 list_id_samples_evaluated.append(id_opt_U)
                 
             else: # Add points to current first iter of MC algo
                 samples_additional_MC = myExperiment.generate()
                 self.samples = ot.Sample(np.concatenate((self.samples,samples_additional_MC)))
-                self.n_MC=  self.samples.getSize()
+                self.n_MC = self.samples.getSize()
                 #Compute u criterion on these samples
                 U_y_pred = self.compute_U(my_krig,list_id_samples_evaluated)
                 id_opt_U=np.argmin(U_y_pred)
-                current_min_U = np.min(U_y_pred)
+                current_min_U = U_y_pred[id_opt_U]
                 list_id_samples_evaluated.append(id_opt_U)
-
+            
             while nb_pt_sim<self.max_sim and current_min_U < self.U_criterion:
                     #evaluation of true function
                     x_new = self.samples[int(id_opt_U)]
@@ -460,14 +460,13 @@ class AK_SSAlgorithm(AK_Algorithm):
                     updated_cov = my_krig.getCovarianceModel()
                     # computation of U
                     U_y_pred = self.compute_U(my_krig,list_id_samples_evaluated)
-                    current_min_U = np.min(U_y_pred)
-                    id_opt_U = np.argmin(U_y_pred)         
+                    id_opt_U = np.argmin(U_y_pred)
+                    current_min_U = U_y_pred[id_opt_U]
                     nb_pt_sim = nb_pt_sim+1
                     list_id_samples_evaluated.append(id_opt_U)
                     
 
                     self.nb_eval = self.n_DoE+nb_pt_sim
-                    self.DoE = [DoE_inputs,DoE_responses]
                     self.kriging_model = my_krig
 
                     '''if self.verbose == True:
@@ -492,14 +491,7 @@ class AK_SSAlgorithm(AK_Algorithm):
             self.cv = res.getCoefficientOfVariation()
             self.samples = SS_kr.getInputSample(SS_kr.getStepsNumber() - 1)
             if self.verbose == True:
-                if current_iter ==1 :
-
-                    print('current_iter', '| Nb_sim',' | Probability estimate', ' | Coefficient of variation')
-                    print('{:9d}'.format(int(current_iter)),'   | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:11e}'.format(self.proba),'   |      ','{:11e}'.format(self.cv))
-                
-                else: 
-                    print('{:9d}'.format(int(current_iter)),'   | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:11e}'.format(self.proba),'   |      ','{:11e}'.format(self.cv))
-                    
+                print('{:9d}'.format(int(current_iter)),'   | ','{:5d}'.format(int(nb_pt_sim)),' |      ','{:11e}'.format(self.proba),'   |      ','{:11e}'.format(self.cv))       
             
             current_iter+=1
 
