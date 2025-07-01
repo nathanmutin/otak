@@ -63,13 +63,13 @@ class AK_Algorithm(ABC):
         
         :list_id_evaluated: list of evaluated :py:class:`openturns.Sample`
         """
-        y_pred = my_krig.getConditionalMean(self.samples)
-        y_var_pred = my_krig.getConditionalMarginalVariance(self.samples)
+        y_pred = np.array(my_krig.getConditionalMean(self.samples)).reshape(-1)
+        y_var_pred = np.array(my_krig.getConditionalMarginalVariance(self.samples)).reshape(-1)
         
         list_id_non_evaluated = np.setdiff1d(np.arange(self.n_MC),list_id_evaluated)
-        U = np.zeros((self.n_MC,1))
+        U = np.zeros(self.n_MC)
         
-        U[list_id_non_evaluated] = np.abs(ot.Sample([ot.Point([self.S])]*int(len(list_id_non_evaluated)))-y_pred[list_id_non_evaluated])/np.sqrt(y_var_pred[list_id_non_evaluated])
+        U[list_id_non_evaluated] = np.abs(y_pred[list_id_non_evaluated] - self.S)/np.sqrt(y_var_pred[list_id_non_evaluated])
         
         if len(list_id_evaluated)>0:
             U[list_id_evaluated] = 5e5
@@ -94,14 +94,14 @@ class AK_Algorithm(ABC):
         self.samples, weights = self.generate_samples_and_weights()
         
         # Generation of DoE
-        DoE_inputs = self.samples[0:self.n_DoE]
+        self.DoE_inputs = self.samples[0:self.n_DoE]
         # Calculation of True function of the DoE
-        DoE_responses = self.limit_state_function(DoE_inputs)
+        self.DoE_responses = self.limit_state_function(self.DoE_inputs)
         list_id_samples_evaluated = [i for i in range(self.n_DoE)]
 
         # Definition of Kriging algorithm
-        algokriging = ot.KrigingAlgorithm(DoE_inputs, 
-                                          DoE_responses,
+        algokriging = ot.KrigingAlgorithm(self.DoE_inputs, 
+                                          self.DoE_responses,
                                           self.cov_model,
                                           self.basis)
         algokriging.run()
@@ -121,13 +121,13 @@ class AK_Algorithm(ABC):
                 x_new = self.samples[id_opt_U]
                 y_new = self.limit_state_function(x_new)
 
-                DoE_inputs.add(x_new)
-                DoE_responses.add(y_new)
+                self.DoE_inputs.add(x_new)
+                self.DoE_responses.add(y_new)
                 
                 # Definition of Kriging model
                 startingPoint = updated_cov.getScale()
-                algokriging = ot.KrigingAlgorithm(DoE_inputs, 
-                                                  DoE_responses,
+                algokriging = ot.KrigingAlgorithm(self.DoE_inputs, 
+                                                  self.DoE_responses,
                                                   updated_cov,
                                                   self.basis)
                 
@@ -386,10 +386,10 @@ class AK_SSAlgorithm(AK_Algorithm):
         dist_LHS = ot.ComposedDistribution(liste_densite)   
         exp_LHS = ot.LHSExperiment(dist_LHS,self.n_DoE)    
         
-        DoE_inputs = exp_LHS.generate()
+        self.DoE_inputs = exp_LHS.generate()
     
         # Calculation of True function of the DoE
-        DoE_responses = self.limit_state_function(DoE_inputs)
+        self.DoE_responses = self.limit_state_function(self.DoE_inputs)
         
         current_iter = 1
         nb_pt_sim=0
@@ -405,8 +405,8 @@ class AK_SSAlgorithm(AK_Algorithm):
                 
                 #Generation of Kriging model
                     
-                algokriging = ot.KrigingAlgorithm(DoE_inputs, 
-                                                  DoE_responses,
+                algokriging = ot.KrigingAlgorithm(self.DoE_inputs, 
+                                                  self.DoE_responses,
                                                   self.cov_model,
                                                   self.basis)
                 
@@ -439,13 +439,13 @@ class AK_SSAlgorithm(AK_Algorithm):
                     x_new = self.samples[int(id_opt_U)]
                     y_new = self.limit_state_function(x_new)
 
-                    DoE_inputs.add(x_new)
-                    DoE_responses.add(y_new)
+                    self.DoE_inputs.add(x_new)
+                    self.DoE_responses.add(y_new)
                     # Definition of Kriging model
 
                     startingPoint = updated_cov.getScale()
-                    algokriging = ot.KrigingAlgorithm(DoE_inputs, 
-                                                      DoE_responses,
+                    algokriging = ot.KrigingAlgorithm(self.DoE_inputs, 
+                                                      self.DoE_responses,
                                                       self.cov_model,
                                                       self.basis)
                     
