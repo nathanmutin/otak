@@ -21,7 +21,7 @@ Requirements
 ============
 - numpy
 - python > 3.7
-- openturns > 1.18
+- openturns > 1.25.1
 
 
 Documentation

@@ -108,7 +108,7 @@ class AK_ISAlgorithm(object):
         self.compute_FORM()
         # Derivation of auxiliary density and sampling
         myImportance = ot.Normal(self.dim)
-        myImportance.setMean(self.FORM_result.getStandardSpaceDesignPoint())
+        myImportance.setMu(self.FORM_result.getStandardSpaceDesignPoint())
         samples_std_space = myImportance.getSample(self.n_IS)
         self.samples_std_space = samples_std_space
         self.samples = self.inv_isoprobtrans(samples_std_space)
@@ -635,12 +635,12 @@ class AK_SSAlgorithm(object):
             my_eventkriging = ot.ThresholdEvent(Y_kr,self.operator,self.S)               
             SS_kr = ot.SubsetSampling(my_eventkriging,self.proposal_range,self.target_proba)
             SS_kr.setMaximumOuterSampling(self.n_SS)
-            SS_kr.setKeepEventSample(True)
+            SS_kr.setKeepSample(True)
             SS_kr.run()
             res = SS_kr.getResult()
             self.proba = res.getProbabilityEstimate()
             self.cv = res.getCoefficientOfVariation()
-            self.samples = SS_kr.getEventInputSample()
+            self.samples = SS_kr.getInputSample(SS_kr.getStepsNumber() - 1)
             if self.verbose == True:
                 if current_iter ==1 :
 
