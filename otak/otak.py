@@ -114,7 +114,8 @@ class AK_Algorithm(ABC):
 
         nb_pt_sim = 0
         list_id_samples_evaluated.append(id_opt_U)
-        print('current_min_U', '| Nb_sim',' | Probability estimate', ' | Coefficient of variation')
+        if self.verbose == True:
+            print('current_min_U', '| Nb_sim',' | Probability estimate', ' | Coefficient of variation')
         
         while nb_pt_sim<self.max_sim and current_min_U < self.U_criterion:
                 #evaluation of true function
@@ -187,7 +188,7 @@ class AK_Algorithm(ABC):
             responses: :py:class:`openturns.Sample` of DoE responses
         
         """
-        return self.DoE_inputs, self.DoE_responses
+        return [self.DoE_inputs, self.DoE_responses]
     
     #Accessor to the failure probability
     def getFailureProbability(self):
